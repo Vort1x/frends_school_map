@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Itinéraires décalés pour éviter superposition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>
+    #map { height: 100vh; }
+    .distance-label {
+      font-size: 18px;
+      font-weight: bold;
+      user-select: none;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<h2 style="text-align:center">Itinéraires entre les villes de nos differantes écoles</h2>
+<div id="map"></div>
+
+<script>
+  const map = L.map('map').setView([43.5, 2.5], 7);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const apiKey = "5b3ce3597851110001cf6248e3103854fcc04ccdb026239ff6d0819c";
+
+  const villes = [
+    { name: "Anglet", coords: [-1.5134, 43.4856] },
+    { name: "Albi", coords: [2.1460, 43.9298] },
+    { name: "Font-Romeu", coords: [2.0331, 42.5047] },
+    { name: "Montpellier", coords: [3.8777, 43.6119] }
+  ];
+
+  const couleurs = ['red', 'blue', 'green', 'orange', 'purple', 'brown'];
+
+  villes.forEach(v => {
+    L.marker([v.coords[1], v.coords[0]]).addTo(map).bindPopup(v.name);
+  });
+
+  // Fonction qui calcule un vecteur perpendiculaire unitaire 2D
+  function vecteurPerp(pt1, pt2) {
+    const dx = pt2[0] - pt1[0];
+    const dy = pt2[1] - pt1[1];
+    const length = Math.sqrt(dx*dx + dy*dy);
+    if (length === 0) return [0,0];
+    return [-dy/length, dx/length];
+  }
+
+  // Décale un ensemble de points sur la ligne perpendiculairement
+  function decalagePerp(coords, offset) {
+    const decaledCoords = [];
+    for (let i = 0; i < coords.length; i++) {
+      let perp;
+      if (i === coords.length - 1) {
+        perp = vecteurPerp(coords[i-1], coords[i]);
+      } else {
+        perp = vecteurPerp(coords[i], coords[i+1]);
+      }
+      decaledCoords.push([
+        coords[i][0] + perp[0] * offset,
+        coords[i][1] + perp[1] * offset
+      ]);
+    }
+    return decaledCoords;
+  }
+
+  async function tracerItineraire(start, end, color, index) {
+    try {
+      const response = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+        method: "POST",
+        headers: {
+          "Authorization": apiKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ coordinates: [start, end] })
+      });
+
+      const data = await response.json();
+
+      // Extraction coords en [lng, lat]
+      const coordsRaw = data.features[0].geometry.coordinates;
+      // Inverser en [lat, lng] pour Leaflet
+      const coords = coordsRaw.map(pt => [pt[1], pt[0]]);
+
+      // Calcul offset selon index (en degrés), ici ~ 0.005 correspond à ~500m environ (varier si trop grand/petit)
+      const offset = 0.005 * ((index % 3) - 1); // Valeurs possibles : -0.005, 0, +0.005 en fonction index mod 3
+
+      // Décaler les coords perpendiculairement
+      const coordsDecales = decalagePerp(coords, offset);
+
+      // Distance en km
+      const distanceKm = (data.features[0].properties.summary.distance / 1000).toFixed(1);
+
+      // Tracer la ligne décalée
+      L.polyline(coordsDecales, { color: color, weight: 4, opacity: 0.8 }).addTo(map);
+
+      // Position médiane de la ligne décalée
+      const mid = coordsDecales[Math.floor(coordsDecales.length / 2)];
+
+      L.marker(mid, {
+        icon: L.divIcon({
+          className: 'distance-label',
+          html: `<span style="color:${color};">${distanceKm} km</span>`,
+          iconAnchor: [0, 0]
+        })
+      }).addTo(map);
+
+    } catch (e) {
+      console.error("Erreur lors du tracé d'un itinéraire :", e);
+    }
+  }
+
+  (async () => {
+    let colorIndex = 0;
+    for (let i = 0; i < villes.length; i++) {
+      for (let j = i + 1; j < villes.length; j++) {
+        await tracerItineraire(villes[i].coords, villes[j].coords, couleurs[colorIndex % couleurs.length], colorIndex);
+        colorIndex++;
+      }
+    }
+  })();
+
+</script>
+
+</body>
+</html>
